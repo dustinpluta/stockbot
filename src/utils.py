@@ -7,65 +7,55 @@ from config import FEATURE_COLUMNS, FEATURE_DIR
 
 # src/utils.py
 
-def concatenate_feature_files(
-    feature_dir: Path = FEATURE_DIR,
-    tickers: Optional[list[str]] = None,
-    dropna: bool = False,
-    debug: bool = False
-) -> pd.DataFrame:
+def concatenate_feature_files(feature_dir: Path = FEATURE_DIR, debug: bool = True) -> pd.DataFrame:
     """
-    Load and concatenate multiple .parquet feature files.
+    Loads and concatenates all .parquet feature files from a directory into a single DataFrame.
 
     Args:
-        feature_dir (Path): Path to directory containing .parquet files
-        tickers (list[str], optional): List of tickers to load (all if None)
-        dropna (bool): Whether to drop rows with missing values
-        debug (bool): If True, print summary stats per ticker
+        feature_dir: Path to the directory containing feature .parquet files.
+        debug: If True, print per-ticker and summary diagnostics.
 
     Returns:
-        pd.DataFrame: Combined feature data
+        pd.DataFrame: Concatenated DataFrame of all features.
     """
-    dfs = []
-    files = list(feature_dir.glob("*.parquet"))
+    all_dfs = []
+    failed = []
 
-    for file in files:
-        ticker = file.stem
-        if tickers and ticker not in tickers:
-            continue
-
+    for file in sorted(feature_dir.glob("*.parquet")):
+        ticker = file.stem.upper()
         try:
             df = pd.read_parquet(file)
+            n_rows = len(df)
+
+            if debug:
+                print(f"--- {ticker} ---")
+                print(f"Rows: {n_rows}")
+                n_missing = df.isna().sum().sum()
+                if n_missing > 0:
+                    missing_cols = df.columns[df.isna().any()].tolist()
+                    print(f"[WARNING] Missing values: {n_missing} in columns {missing_cols}")
+                else:
+                    print("[OK] No missing values")
+
+            all_dfs.append(df)
+
         except Exception as e:
-            print(f"[SKIP] Failed to load {ticker}: {e}")
-            continue
+            print(f"[ERROR] Failed to load {file.name}: {e}")
+            failed.append(file.name)
 
-        if debug:
-            print(f"\n[DEBUG] {ticker} feature summary:")
-            print(f"  Total rows:       {len(df)}")
-            print(f"  Unique timestamps: {df.index.nunique()}")
-            num_missing = df.isnull().sum().sum()
-            print(f"  Total missing values: {num_missing}")
-            if num_missing > 0:
-                missing_by_col = df.isnull().sum()
-                missing_cols = missing_by_col[missing_by_col > 0]
-                print(f"  Features with missing values:")
-                for col, count in missing_cols.items():
-                    print(f"    {col}: {count}")
+    if not all_dfs:
+        raise RuntimeError("No feature files could be loaded.")
 
-        dfs.append(df)
+    combined = pd.concat(all_dfs).sort_index()
 
-    if not dfs:
-        raise ValueError("No valid feature files found.")
+    if debug:
+        print("\n=== Overall Summary ===")
+        print(f"Total rows: {len(combined)}")
+        print(f"Tickers: {combined['ticker'].nunique()}")
+        print(f"Date range: {combined.index.min()} to {combined.index.max()}")
+        print(f"Feature columns: {sorted(set(combined.columns) - {'target', 'ticker'})}")
 
-    df_all = pd.concat(dfs)
-
-    if dropna:
-        df_all.dropna(inplace=True)
-
-    # Standardize index to naive UTC datetime
-    df_all.index = df_all.index.tz_localize(None)
-
-    return df_all
+    return combined
 
 def train_test_split_from_features(
     df: pd.DataFrame,
@@ -106,7 +96,7 @@ def train_test_split_from_features(
 
 def prepare_train_test_data(
     feature_dir: Path = FEATURE_DIR,
-    split_time: pd.Timestamp = pd.Timestamp("2024-12-01"),
+    split_time: pd.Timestamp = pd.Timestamp("2025-06-01"),
     tickers: Optional[list[str]] = None,
     dropna: bool = True,
     debug: bool = False
@@ -126,8 +116,6 @@ def prepare_train_test_data(
     """
     df = concatenate_feature_files(
         feature_dir=feature_dir,
-        tickers=tickers,
-        dropna=dropna,
         debug=debug
     )
 

@@ -2,51 +2,52 @@
 
 import pandas as pd
 from pathlib import Path
-
+from config import FEATURE_COLUMNS, FEATURE_DIR, LABEL_HORIZON_HOURS, DEBUG
+from features import compute_features
 from data_fetch import get_historical_data
-from features import add_technical_indicators
-from config import FEATURE_DIR, LABEL_HORIZON_HOURS
 
-def create_labeled_features(df: pd.DataFrame, horizon: int = 1) -> pd.DataFrame:
+
+def label_target(df: pd.DataFrame, horizon: int = LABEL_HORIZON_HOURS) -> pd.Series:
     """
-    Adds a binary label based on whether the close price increases over the next `horizon` hours.
+    Label the target: 1 if close price increases within N hours, else 0.
+    """
+    return (df["Close"].shift(-horizon) > df["Close"]).astype(int)
 
-    Args:
-        df (pd.DataFrame): Feature-enhanced stock data
-        horizon (int): Number of periods (e.g., hours) into the future to predict
+
+def process_ticker(ticker: str, debug: bool = DEBUG) -> pd.DataFrame:
+    """
+    Fetch data, compute features, and label target for a given ticker.
 
     Returns:
-        pd.DataFrame: DataFrame with 'target' column added
+        DataFrame with features + target + 'ticker' column
     """
-    df = df.copy()
-    future_close = df["Close"].shift(-horizon)
+    try:
+        df = get_historical_data(ticker, period="60d", interval="1h")
+        if debug:
+            print(f"[INFO] Fetched {len(df)} rows for {ticker}")
 
-    # Align to avoid index mismatch
-    close_aligned, future_aligned = df["Close"].align(future_close, join="inner")
-    df = df.loc[close_aligned.index]
-    df["target"] = (future_aligned > close_aligned).astype(int)
+        df = compute_features(df)
 
-    return df
+        df["target"] = label_target(df)
+        df["ticker"] = ticker
+        #df = df.dropna()
 
-def process_and_save_ticker(ticker: str, period: str = '60d', interval: str = '1h'):
+        if debug:
+            print(f"[INFO] Final shape for {ticker}: {df.shape}")
+
+        save_features(df, ticker)
+        return df
+
+    except Exception as e:
+        print(f"[ERROR] Failed to process {ticker}: {e}")
+        return pd.DataFrame()  # fail gracefully
+
+
+def save_features(df: pd.DataFrame, ticker: str, feature_dir: Path = FEATURE_DIR):
     """
-    Fetch data, compute features and target, and save to disk.
-
-    Args:
-        ticker (str): Stock ticker symbol
-        period (str): Time period (default 60 days)
-        interval (str): Interval (default 1 hour)
+    Save feature DataFrame for a ticker to a .parquet file.
     """
-    print(f"Processing {ticker}...")
-    df = get_historical_data(ticker, period=period, interval=interval)
-    df = add_technical_indicators(df)
-    df = create_labeled_features(df, horizon=LABEL_HORIZON_HOURS)
-    df["ticker"] = ticker  # Add ticker column for pooled training
-
-    FEATURE_DIR.mkdir(parents=True, exist_ok=True)
-    output_path = FEATURE_DIR / f"{ticker}.parquet"
-    df.to_parquet(output_path, index=True)
-    print(f"Saved {len(df)} rows to {output_path}")
-
-if __name__ == "__main__":
-    process_and_save_ticker("AAPL")
+    feature_dir.mkdir(parents=True, exist_ok=True)
+    out_path = feature_dir / f"{ticker}.parquet"
+    df.to_parquet(out_path)
+    print(f"[SUCCESS] Saved features for {ticker} to {out_path}")

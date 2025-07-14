@@ -21,7 +21,7 @@ def get_historical_data(ticker: str, period: str = '60d', interval: str = '1h') 
     Returns:
         pd.DataFrame: Clean OHLCV data indexed by naive UTC datetime
     """
-    df = yf.download(ticker, period=period, interval=interval, progress=False)
+    df = yf.download(ticker, period=period, interval=interval, progress=False, auto_adjust=True)
     df.dropna(inplace=True)
 
     # Flatten columns if MultiIndex

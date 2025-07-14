@@ -6,7 +6,8 @@ from pathlib import Path
 # Add src/ to path
 sys.path.append(str(Path(__file__).resolve().parents[1] / 'src'))
 
-from feature_pipeline import process_and_save_ticker
+from feature_pipeline import process_ticker
+from config import FEATURE_DIR
 
 def read_tickers_from_file(filepath: str):
     with open(filepath, 'r') as f:
@@ -28,7 +29,7 @@ def main():
 
     for ticker in tickers:
         try:
-            process_and_save_ticker(ticker)
+            process_ticker(ticker)
         except Exception as e:
             print(f"Failed to process {ticker}: {e}")
 
