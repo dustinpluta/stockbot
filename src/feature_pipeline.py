@@ -14,7 +14,7 @@ def label_target(df: pd.DataFrame, horizon: int = LABEL_HORIZON_HOURS) -> pd.Ser
     return (df["Close"].shift(-horizon) > df["Close"]).astype(int)
 
 
-def process_ticker(ticker: str, debug: bool = DEBUG) -> pd.DataFrame:
+def process_ticker(ticker: str, period: chr = "60d", debug: bool = DEBUG) -> pd.DataFrame:
     """
     Fetch data, compute features, and label target for a given ticker.
 
@@ -22,7 +22,7 @@ def process_ticker(ticker: str, debug: bool = DEBUG) -> pd.DataFrame:
         DataFrame with features + target + 'ticker' column
     """
     try:
-        df = get_historical_data(ticker, period="60d", interval="1h")
+        df = get_historical_data(ticker, period=period, interval="1h")
         if debug:
             print(f"[INFO] Fetched {len(df)} rows for {ticker}")
 

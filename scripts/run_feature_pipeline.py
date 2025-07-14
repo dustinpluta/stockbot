@@ -15,11 +15,12 @@ def read_tickers_from_file(filepath: str):
     return tickers
 
 def main():
-    if len(sys.argv) != 2:
-        print("Usage: python scripts/run_feature_pipeline.py <ticker_file.txt>")
+    if len(sys.argv) != 3:
+        print("Usage: python scripts/run_feature_pipeline.py <ticker_file.txt> <time_period>")
         sys.exit(1)
 
     ticker_file = sys.argv[1]
+    period = sys.argv[2]
 
     if not Path(ticker_file).exists():
         print(f"Error: File '{ticker_file}' not found.")
@@ -29,7 +30,7 @@ def main():
 
     for ticker in tickers:
         try:
-            process_ticker(ticker)
+            process_ticker(ticker, period)
         except Exception as e:
             print(f"Failed to process {ticker}: {e}")
 
