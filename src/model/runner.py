@@ -6,7 +6,7 @@ from config import FEATURE_SETS
 from pathlib import Path
 import joblib
 import json
-import yaml
+import yaml # type: ignore
 
 def run_model_training(config: dict):
     model_id = config["model_id"]
