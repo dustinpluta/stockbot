@@ -1,2 +1,2 @@
-data/output.parquet
-data/features/*.parquet
+models
+data
