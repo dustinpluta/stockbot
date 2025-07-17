@@ -1,7 +1,10 @@
 # scripts/run_data_pipeline.py
+import pandas as pd
 import sys
 from pathlib import Path
-import pandas as pd
+
+# Add the src directory to the Python path
+sys.path.append(str(Path(__file__).resolve().parents[1] / "src"))
 
 import config
 from preprocessing.data_fetch import fetch_stock_data

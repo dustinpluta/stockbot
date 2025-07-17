@@ -1,17 +1,30 @@
+# src/model/train.py
+
 import sys
-import yaml # type: ignore
+import yaml
 import json
 import joblib
 import pandas as pd
 from pathlib import Path
-from xgboost import XGBClassifier
 
 from config import FEATURE_SETS
-from utils.filter_feature_data import filter_feature_data
+from preprocessing.filter_feature_data import filter_feature_data
 from model.labeling import get_label_function
 from model.split import split_data
+from model.save_results import save_results
 from model.metrics import METRIC_REGISTRY
 
+# Import your supported model classes
+from xgboost import XGBClassifier
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.linear_model import LogisticRegression
+
+# Map config strings to actual classes
+MODEL_REGISTRY = {
+    "xgboost": XGBClassifier,
+    "random_forest": RandomForestClassifier,
+    "logistic_regression": LogisticRegression,
+}
 
 def load_config(config_path: str) -> dict:
     with open(config_path, "r") as f:
@@ -29,38 +42,6 @@ def evaluate_model(model, X_eval, y_eval) -> dict:
             results[name] = f"Error: {e}"
     return results
 
-
-def save_model_results(
-    output_dir: Path,
-    model_id: str,
-    metrics: dict,
-    y_eval: pd.Series,
-    feature_names: list,
-    data_type: str = "test"
-):
-    """Save evaluation summary including metrics, label distribution, and features."""
-    summary = {
-        "model_id": model_id,
-        "data_type": data_type,
-        "num_rows": len(y_eval),
-        "label_distribution": {
-            "0": int((y_eval == 0).sum()),
-            "1": int((y_eval == 1).sum())
-        },
-        "num_features": len(feature_names),
-        "feature_names": feature_names,
-        "metrics": metrics,
-    }
-
-    with open(output_dir / "metrics.json", "w") as f:
-        json.dump(summary, f, indent=2)
-
-    print(f"[{model_id}] {data_type.capitalize()} Summary:")
-    print(f"  Label counts — 0s: {summary['label_distribution']['0']}, 1s: {summary['label_distribution']['1']}")
-    print(f"  Features used ({summary['num_features']}): {', '.join(feature_names)}")
-    for k, v in metrics.items():
-        print(f"  {k}: {v}")
-     
 def train_from_config(config: dict):
     model_id = config["model_id"]
     output_dir = Path("models") / model_id
@@ -73,7 +54,7 @@ def train_from_config(config: dict):
     # Select features
     feature_list = FEATURE_SETS[config["feature_set"]]
 
-    # Load data
+    # Load and filter data
     df = filter_feature_data(
         feature_dir=Path("data/features"),
         tickers=tickers,
@@ -83,7 +64,12 @@ def train_from_config(config: dict):
     ).dropna()
 
     # Split before labeling
-    train_df, test_df = split_data(df, config["train_start"], config["train_end"], config["test_start"])
+    train_df, test_df = split_data(
+        df,
+        train_start=config["train_start"],
+        train_end=config["train_end"],
+        test_start=config["test_start"],
+    )
 
     # Apply label
     label_func = get_label_function(config["label_method"])
@@ -103,8 +89,16 @@ def train_from_config(config: dict):
 
     print(f"[INFO] Training on {len(X_train)} rows, testing on {len(X_test)} rows")
 
-    # Train
-    model = XGBClassifier(**config["xgboost_params"])
+    # Instantiate model based on config
+    model_type = config.get("model_type", "").lower()
+    ModelClass = MODEL_REGISTRY.get(model_type)
+    if ModelClass is None:
+        raise ValueError(f"Unknown model_type '{model_type}'. Valid options: {list(MODEL_REGISTRY)}")
+
+    model_params = config.get("model_params", {})
+    model = ModelClass(**model_params)
+
+    # Fit
     model.fit(X_train, y_train)
 
     # Save model + config
@@ -114,7 +108,7 @@ def train_from_config(config: dict):
 
     # Evaluate and save results
     metrics = evaluate_model(model, X_test, y_test)
-    save_model_results(output_dir, model_id, metrics, y_test, model_features, data_type="test")
+    save_results(output_dir, model_id, metrics, y_test, model_features, data_type="test")
 
 
 def main():

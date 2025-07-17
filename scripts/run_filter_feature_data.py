@@ -4,7 +4,10 @@ import sys
 from pathlib import Path
 import pandas as pd
 
-from utils.filter_feature_data import filter_feature_data
+# Add the src directory to the Python path
+sys.path.append(str(Path(__file__).resolve().parents[1] / "src"))
+
+from preprocessing.filter_feature_data import filter_feature_data
 from preprocessing.features import FEATURE_REGISTRY
 
 
