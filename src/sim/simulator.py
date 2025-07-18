@@ -11,15 +11,15 @@ class PortfolioSimulator:
 
     def reset(self):
         self.budget = self.initial_budget
-        self.holdings = {}  # {ticker: {'buy_price': ..., 'Datetime': ...}}
+        self.holdings = {}  # {ticker: {'buy_price': ..., 'timestamp': ...}}
         self.trade_log = []
         self.current_time = None
         self.sold_today = set()
 
     def simulate(self, df: pd.DataFrame, price_col: str = "Close") -> pd.DataFrame:
-        df = df.sort_values(by="Datetime").copy()
+        df = df.sort_values(by="timestamp").copy()
         for _, row in df.iterrows():
-            self.current_time = pd.to_datetime(row["Datetime"])
+            self.current_time = pd.to_datetime(row["timestamp"])
             ticker = row["ticker"]
             price = row[price_col]
             action = row.get("action")
@@ -41,14 +41,14 @@ class PortfolioSimulator:
         if self.budget < price:
             return
 
-        self.holdings[ticker] = {"buy_price": price, "Datetime": self.current_time}
+        self.holdings[ticker] = {"buy_price": price, "timestamp": self.current_time}
         self.budget -= price
         self._record_trade("buy", ticker, price, self.current_time)
 
     def _handle_sell(self, ticker, price):
         if ticker not in self.holdings:
             return
-        buy_time = self.holdings[ticker]["Datetime"]
+        buy_time = self.holdings[ticker]["timestamp"]
         if self.current_time - buy_time < self.cooldown:
             return
 
@@ -56,9 +56,9 @@ class PortfolioSimulator:
         del self.holdings[ticker]
         self.sold_today.add(ticker)
 
-    def _record_trade(self, action, ticker, price, Datetime):
+    def _record_trade(self, action, ticker, price, timestamp):
         self.trade_log.append({
-            "Datetime": Datetime,
+            "timestamp": timestamp,
             "ticker": ticker,
             "action": action,
             "price": price,
@@ -66,11 +66,20 @@ class PortfolioSimulator:
         })
 
     def get_summary(self):
-        df = pd.DataFrame(self.trade_log)
-        if df.empty:
-            return {"final_budget": self.budget, "pnl": 0.0}
-        pnl = sum(
-            row["price"] - self.holdings[row["ticker"]]["buy_price"]
-            for row in df[df["action"] == "sell"].itertuples()
-        )
-        return {"final_budget": self.budget, "pnl": pnl}
+        trades = pd.DataFrame(self.trade_log).sort_values("timestamp")
+        buy_prices = {}
+        total_pnl = 0.0
+
+        for _, row in trades.iterrows():
+            action, ticker, price = row["action"], row["ticker"], row["price"]
+            if action == "buy":
+                buy_prices[ticker] = price
+            elif action in ("sell", "final_sell"):
+                bp = buy_prices.pop(ticker, None)
+                if bp is not None:
+                    total_pnl += price - bp
+
+        return {
+            "final_budget": self.budget,
+            "pnl": total_pnl
+        }

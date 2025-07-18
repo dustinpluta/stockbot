@@ -1,27 +1,90 @@
-# src/sim/strategy.py
+# src/sim/strategies.py
+
 import pandas as pd
+from datetime import timedelta
+from typing import Callable, Dict
 
-def basic_buy_strategy(df: pd.DataFrame, top_k: int = 3, prob_col: str = "predicted_prob") -> pd.DataFrame:
+# --- Strategy Registry ---
+
+STRATEGY_REGISTRY: Dict[str, Callable] = {}
+
+def register_strategy(name: str):
     """
-    Generate a basic buy strategy signal: at each timestamp, buy top-k stocks by predicted probability.
-
-    Parameters:
-        df (pd.DataFrame): Must contain columns ['ticker', 'timestamp', 'predicted_prob']
-        top_k (int): Number of stocks to "buy" per time step
-        prob_col (str): Name of the column containing predicted probabilities
-
-    Returns:
-        pd.DataFrame: A DataFrame with the same index, including a new column 'action' with 'buy' or None.
+    Decorator to register a strategy function under a given name.
+    The strategy function must have signature: (df: pd.DataFrame, **kwargs) -> pd.DataFrame.
     """
-    if not {'ticker', 'Datetime', "predicted_prob"}.issubset(df.columns):
-        raise ValueError("Required columns missing: 'ticker', 'timestamp', predicted probability column.")
+    def decorator(fn: Callable):
+        if name in STRATEGY_REGISTRY:
+            raise ValueError(f"Strategy '{name}' is already registered.")
+        STRATEGY_REGISTRY[name] = fn
+        return fn
+    return decorator
 
-    df_sorted = df.sort_values(by=['Datetime', 'predicted_prob'], ascending=[True, False]).copy()
-    df_sorted['action'] = None
 
-    # For each timestamp, mark top_k as 'buy'
-    for ts, group in df_sorted.groupby('Datetime'):
-        top_indices = group.head(top_k).index
-        df_sorted.loc[top_indices, 'action'] = 'buy'
+# --- Strategy Implementations ---
 
-    return df_sorted
+@register_strategy("basic_buy")
+def basic_buy_strategy(
+    df: pd.DataFrame,
+    top_k: int = 3,
+    prob_col: str = "predicted_prob"
+) -> pd.DataFrame:
+    """
+    Strategy #1: Buy top_k tickers by predicted probability each timestamp.
+    End-of-day sells are handled by the simulator.
+    """
+    df = df.copy()
+    df["action"] = None
+
+    for ts, group in df.groupby("timestamp"):
+        top = group.nlargest(top_k, prob_col)
+        df.loc[top.index, "action"] = "buy"
+
+    return df
+
+
+@register_strategy("hold_n_hours")
+def hold_n_hours_strategy(
+    df: pd.DataFrame,
+    hold_hours: int = 3,
+    top_k: int = 3,
+    prob_col: str = "predicted_prob"
+) -> pd.DataFrame:
+    """
+    Strategy #2: Buy top_k as in basic_buy, then sell each position
+    exactly hold_hours later (if that timestamp exists).
+    """
+    df = basic_buy_strategy(df, top_k=top_k, prob_col=prob_col)
+    df = df.copy()
+
+    for idx, row in df[df["action"] == "buy"].iterrows():
+        sell_time = row["timestamp"] + timedelta(hours=hold_hours)
+        mask = (df["timestamp"] == sell_time) & (df["ticker"] == row["ticker"])
+        df.loc[mask, "action"] = "sell"
+
+    return df
+
+
+@register_strategy("threshold_hold")
+def threshold_time_exit_strategy(
+    df: pd.DataFrame,
+    threshold: float = 0.7,
+    hold_hours: int = 3,
+    prob_col: str = "predicted_prob"
+) -> pd.DataFrame:
+    """
+    Strategy #3: Buy when predicted probability exceeds threshold,
+    then sell hold_hours later if that timestamp exists.
+    """
+    df = df.copy()
+    df["action"] = None
+
+    buys = df[df[prob_col] > threshold]
+    df.loc[buys.index, "action"] = "buy"
+
+    for idx, row in buys.iterrows():
+        sell_time = row["timestamp"] + timedelta(hours=hold_hours)
+        mask = (df["timestamp"] == sell_time) & (df["ticker"] == row["ticker"])
+        df.loc[mask, "action"] = "sell"
+
+    return df

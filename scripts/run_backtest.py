@@ -3,6 +3,7 @@
 
 import sys
 import argparse
+import yaml
 import joblib
 import pandas as pd
 from pathlib import Path
@@ -13,36 +14,53 @@ sys.path.insert(0, str(SRC_ROOT))
 
 from config import FEATURE_DIR, MODEL_DIR
 from preprocessing.filter_feature_data import filter_feature_data
-from sim.strategies import basic_buy_strategy
+from sim.strategies import STRATEGY_REGISTRY
 from sim.simulator import PortfolioSimulator
 
+
 def parse_args():
-    p = argparse.ArgumentParser(
-        description="Backtest a trained model on the test feature split"
+    parser = argparse.ArgumentParser(
+        description="Backtest using a simulation config YAML"
     )
-    p.add_argument(
-        "tickers_file",
+    parser.add_argument(
+        "sim_config",
         type=Path,
-        help="Text file with one ticker per line"
+        help="Path to the simulation config YAML file"
     )
-    p.add_argument(
-        "model_id",
-        help="Model identifier (folder under models/) to load"
-    )
-    p.add_argument(
+    parser.add_argument(
         "--output",
         "-o",
         type=Path,
         default=None,
         help="Optional CSV path to save the trade log"
     )
-    return p.parse_args()
+    return parser.parse_args()
 
 
-def run_backtest(tickers_file: Path, model_id: str, output_file: Path = None):
+def load_sim_config(path: Path) -> dict:
+    with path.open() as f:
+        return yaml.safe_load(f)
+
+
+def run_backtest(sim_cfg: dict, output_file: Path = None):
+    # Unpack sim config
+    model_id      = sim_cfg["model_id"]
+    tickers_file  = Path(sim_cfg["tickers_file"])
+    strategy_name = sim_cfg["strategy"]
+    strat_params  = sim_cfg.get("strategy_params", {})
+    budget        = sim_cfg.get("initial_budget", 1000.0)
+    cooldown      = sim_cfg.get("cooldown_hours", strat_params.get("hold_hours", 3))
+    feature_split = sim_cfg.get("feature_split", "test")
+
+    # New: date-range fields
+    start_date = sim_cfg.get("start_date")
+    end_date   = sim_cfg.get("end_date")
+
+    print(f"[INFO] Backtest window: {start_date} → {end_date}")
+
     # 1) Load tickers
     tickers = [t.strip() for t in tickers_file.read_text().splitlines() if t.strip()]
-    print(f"[INFO] Tick­ers loaded: {len(tickers)} from {tickers_file}")
+    print(f"[INFO] Loaded {len(tickers)} tickers from {tickers_file}")
 
     # 2) Load model
     model_path = MODEL_DIR / model_id / "model.pkl"
@@ -51,47 +69,56 @@ def run_backtest(tickers_file: Path, model_id: str, output_file: Path = None):
     model = joblib.load(model_path)
     print(f"[INFO] Loaded model '{model_id}'")
 
-    # 3) Load test‐split features
-    test_feat_dir = FEATURE_DIR / "test"
+    # 3) Load feature data for the specified split & date window
     df = filter_feature_data(
-        feature_dir=test_feat_dir,
+        feature_dir=FEATURE_DIR / feature_split,
         tickers=tickers,
-        features=None,      # None = load all features
-        start_time=None,
-        end_time=None,
+        features=None,
+        start_time=start_date,
+        end_time=end_date,
         debug=False,
         retain_timestamp=True
     )
-    
     if df.empty:
-        sys.exit("[ERROR] No test data loaded; check your FEATURE_DIR/test folder")
+        sys.exit(f"[ERROR] No data in feature split '{feature_split}' "
+                 f"for dates {start_date} → {end_date}")
 
-    # 4) Predict probabilities
-    #    Assumes classifier with predict_proba and `feature_names_in_`
-    X = df[model.feature_names_in_]
+    # 4) Prepare for prediction
+    required_feats = list(model.feature_names_in_)
+    df = df.dropna(subset=required_feats)
+    X = df[required_feats]
+
+    # 5) Score
     df["predicted_prob"] = model.predict_proba(X)[:, 1]
 
-    # 5) Generate buy signals
-    signals = basic_buy_strategy(df)
+    # 6) Strategy
+    if strategy_name not in STRATEGY_REGISTRY:
+        sys.exit(f"[ERROR] Unknown strategy '{strategy_name}'")
+    strat_fn = STRATEGY_REGISTRY[strategy_name]
+    print(f"[INFO] Applying strategy '{strategy_name}' with params {strat_params}")
+    signals = strat_fn(df, **strat_params)
 
-    # 6) Run the portfolio simulator
-    sim = PortfolioSimulator(initial_budget=1000)
-    trade_log = sim.simulate(signals)
+    # 7) Simulate
+    sim = PortfolioSimulator(initial_budget=budget, cooldown_hours=cooldown)
+    trade_log = sim.simulate(signals, price_col="Close")
 
-    # 7) Report summary & optionally save
+    # 8) Report
     summary = sim.get_summary()
-    print("\n[RESULT] Backtest Summary")
+    print("\n[RESULT] Backtest Summary:")
     for k, v in summary.items():
         print(f"  {k}: {v}")
 
+    # 9) Save if requested
     if output_file:
+        output_file.parent.mkdir(exist_ok=True, parents=True)
         trade_log.to_csv(output_file, index=False)
         print(f"[INFO] Trade log saved to {output_file}")
 
 
 def main():
     args = parse_args()
-    run_backtest(args.tickers_file, args.model_id, args.output)
+    sim_cfg = load_sim_config(args.sim_config)
+    run_backtest(sim_cfg, args.output)
 
 
 if __name__ == "__main__":

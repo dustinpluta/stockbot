@@ -61,7 +61,8 @@ def filter_feature_data(
 
     # Optionally reset index to a timestamp column
     if retain_timestamp:
-        result = result.reset_index().rename(columns={"index": "timestamp"})
+        result["timestamp"] = result.index
+        result = result.reset_index(drop=True)
     if save_path:
         save_path.parent.mkdir(parents=True, exist_ok=True)
         result.to_parquet(save_path)
