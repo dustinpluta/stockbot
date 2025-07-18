@@ -10,7 +10,8 @@ def filter_feature_data(
     start_time: Optional[pd.Timestamp] = None,
     end_time: Optional[pd.Timestamp] = None,
     save_path: Optional[Path] = None,
-    debug: bool = False
+    debug: bool = False,
+    retain_timestamp: bool = False
 ) -> pd.DataFrame:
     """
     Load and filter feature data from individual ticker Parquet files.
@@ -23,9 +24,11 @@ def filter_feature_data(
         end_time: optional datetime upper bound
         save_path: optional path to save the concatenated filtered DataFrame
         debug: print summary of result
+        retain_timestamp: if True, reset the datetime index into a column "timestamp"
 
     Returns:
-        Concatenated and filtered DataFrame with a 'ticker' column
+        Concatenated and filtered DataFrame with a 'ticker' column.
+        If retain_timestamp=True, includes a "timestamp" column.
     """
     all_dfs = []
 
@@ -37,8 +40,7 @@ def filter_feature_data(
 
         df = pd.read_parquet(path)
         df = df.drop(columns=[ticker], errors="ignore")
-        
-        
+
         # Time filter
         if start_time or end_time:
             df = df.loc[
@@ -57,6 +59,9 @@ def filter_feature_data(
 
     result = pd.concat(all_dfs).sort_index()
 
+    # Optionally reset index to a timestamp column
+    if retain_timestamp:
+        result = result.reset_index().rename(columns={"index": "timestamp"})
     if save_path:
         save_path.parent.mkdir(parents=True, exist_ok=True)
         result.to_parquet(save_path)
