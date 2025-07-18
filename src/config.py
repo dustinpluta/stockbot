@@ -14,6 +14,23 @@ MODEL_DIR = PROJECT_ROOT / "models"
 TEST_SIZE = 0.2  # fraction of data used for testing
 RANDOM_STATE = 42
 
+# Time‐series split definitions (UTC timestamps or ISO strings)
+TRAIN_START   = "2024-07-01"
+TRAIN_END     = "2025-01-01"
+VALID_START   = "2025-01-02"
+VALID_END     = "2025-05-01"
+TEST_START    = "2025-05-02"
+TEST_END      = "2025-07-01"
+
+PERIOD = "390d"
+
+# Derived if you like:
+SPLIT_BOUNDS = {
+    "train": (TRAIN_START, TRAIN_END),
+    "validate": (VALID_START, VALID_END),
+    "test": (TEST_START, TEST_END),
+}
+
 # Feature sets
 FEATURE_SETS = {
     "all": [  # default

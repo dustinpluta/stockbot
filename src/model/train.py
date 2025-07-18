@@ -1,122 +1,113 @@
+#!/usr/bin/env python3
 # src/model/train.py
 
+import logging
 import sys
-import yaml
-import json
-import joblib
-import pandas as pd
 from pathlib import Path
+import joblib
+import yaml
 
-from config import FEATURE_SETS
+from config import FEATURE_SETS, FEATURE_DIR, MODEL_DIR
 from preprocessing.filter_feature_data import filter_feature_data
 from model.labeling import get_label_function
-from model.split import split_data
 from model.save_results import save_results
-from model.metrics import METRIC_REGISTRY
+from model.registry import MODEL_REGISTRY
+from model.utils import parse_args, load_config, evaluate_model
 
-# Import your supported model classes
-from xgboost import XGBClassifier
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.linear_model import LogisticRegression
-
-# Map config strings to actual classes
-MODEL_REGISTRY = {
-    "xgboost": XGBClassifier,
-    "random_forest": RandomForestClassifier,
-    "logistic_regression": LogisticRegression,
-}
-
-def load_config(config_path: str) -> dict:
-    with open(config_path, "r") as f:
-        return yaml.safe_load(f)
+# Configure root logger
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
+logger = logging.getLogger(__name__)
 
 
-def evaluate_model(model, X_eval, y_eval) -> dict:
-    """Evaluate the trained model using the registered metrics."""
-    y_pred = model.predict(X_eval)
-    results = {}
-    for name, func in METRIC_REGISTRY.items():
-        try:
-            results[name] = float(func(y_eval, y_pred))
-        except Exception as e:
-            results[name] = f"Error: {e}"
-    return results
-
-def train_from_config(config: dict):
+def train_from_config(config: dict) -> None:
+    """
+    Core training logic:
+      1. Load feature DataFrames for train/validate/test splits
+      2. Label each split
+      3. Invoke the registered trainer for model_type
+      4. Persist model, config, and evaluation metrics
+    """
     model_id = config["model_id"]
-    output_dir = Path("models") / model_id
+    output_dir = MODEL_DIR / model_id
     output_dir.mkdir(parents=True, exist_ok=True)
+    logger.info("Starting training for model '%s'", model_id)
 
-    # Load tickers
-    with open(config["tickers_file"], "r") as f:
-        tickers = [line.strip() for line in f if line.strip()]
+    # Load ticker list
+    tickers_file = Path(config["tickers_file"])
+    tickers = [t.strip() for t in tickers_file.read_text().splitlines() if t.strip()]
+    logger.info("Loaded %d tickers from %s", len(tickers), tickers_file)
 
-    # Select features
+    # Determine feature list
     feature_list = FEATURE_SETS[config["feature_set"]]
+    logger.info("Feature set '%s' → %d features", config["feature_set"], len(feature_list))
 
-    # Load and filter data
-    df = filter_feature_data(
-        feature_dir=Path("data/features"),
-        tickers=tickers,
-        features=feature_list + ["Close"],
-        start_time=config["train_start"],
-        end_time=config["test_end"],
-    ).dropna()
+    # Load each split's data
+    dfs = {}
+    for split in ("train", "validate"):
+        df = filter_feature_data(
+            feature_dir=FEATURE_DIR / split,
+            tickers=tickers,
+            features=feature_list + ["Close"],
+            start_time=None,
+            end_time=None,
+            debug=False
+        )
+        if df.empty:
+            logger.error("No data for split '%s'", split)
+            sys.exit(1)
+        dfs[split] = df
+        logger.info("Loaded %d rows for split '%s'", len(df), split)
 
-    # Split before labeling
-    train_df, test_df = split_data(
-        df,
-        train_start=config["train_start"],
-        train_end=config["train_end"],
-        test_start=config["test_start"],
-    )
+    # Label and clean each split
+    label_fn = get_label_function(config["label_method"])
+    for split, df in dfs.items():
+        df["target"] = label_fn(df)
+        df.dropna(subset=["target"] + feature_list, inplace=True)
+        dfs[split] = df
+        logger.info("After labeling, '%s' has %d rows", split, len(df))
 
-    # Apply label
-    label_func = get_label_function(config["label_method"])
-    train_df["target"] = label_func(train_df)
-    test_df["target"] = label_func(test_df)
+    # Prepare train/validate/test arrays
+    X_train, y_train = dfs["train"][feature_list], dfs["train"]["target"]
+    X_val,   y_val   = dfs["validate"][feature_list], dfs["validate"]["target"]
+    #X_test,  y_test  = dfs["test"][feature_list], dfs["test"]["target"]
 
-    # Drop missing labels
-    train_df = train_df.dropna(subset=["target"])
-    test_df = test_df.dropna(subset=["target"])
-
-    # Extract model features
-    model_features = [f for f in feature_list if f in train_df.columns]
-    X_train = train_df[model_features]
-    y_train = train_df["target"]
-    X_test = test_df[model_features]
-    y_test = test_df["target"]
-
-    print(f"[INFO] Training on {len(X_train)} rows, testing on {len(X_test)} rows")
-
-    # Instantiate model based on config
-    model_type = config.get("model_type", "").lower()
-    ModelClass = MODEL_REGISTRY.get(model_type)
-    if ModelClass is None:
-        raise ValueError(f"Unknown model_type '{model_type}'. Valid options: {list(MODEL_REGISTRY)}")
-
-    model_params = config.get("model_params", {})
-    model = ModelClass(**model_params)
-
-    # Fit
-    model.fit(X_train, y_train)
-
-    # Save model + config
-    joblib.dump(model, output_dir / "model.pkl")
-    with open(output_dir / "config.yaml", "w") as f:
-        yaml.safe_dump(config, f)
-
-    # Evaluate and save results
-    metrics = evaluate_model(model, X_test, y_test)
-    save_results(output_dir, model_id, metrics, y_test, model_features, data_type="test")
-
-
-def main():
-    if len(sys.argv) != 2:
-        print("Usage: python src/model/train.py <config_file.yaml>")
+    # Train via registry
+    model_type = config["model_type"].lower()
+    trainer = MODEL_REGISTRY.get(model_type)
+    if not trainer:
+        logger.error("Unknown model_type '%s'. Valid: %s", model_type, list(MODEL_REGISTRY))
         sys.exit(1)
 
-    config = load_config(sys.argv[1])
+    logger.info("Training model '%s'...", model_type)
+    model = trainer(X_train, y_train, X_val, y_val, config.get("model_params", {}))
+
+    # Persist model and config
+    model_path = output_dir / "model.pkl"
+    joblib.dump(model, model_path)
+    (output_dir / "config.yaml").write_text(yaml.safe_dump(config))
+    logger.info("Model saved to %s", model_path)
+
+    # Evaluate on test set
+    metrics = evaluate_model(model, X_val, y_val)
+    save_results(
+        output_dir=output_dir,
+        model_id=model_id,
+        metrics=metrics,
+        y_eval=y_val,
+        feature_names=feature_list,
+        data_type="Validate"
+    )
+    logger.info("Training complete for '%s'", model_id)
+
+
+def main() -> None:
+    """CLI entry point."""
+    args = parse_args()
+    config = load_config(args.config_file)
     train_from_config(config)
 
 

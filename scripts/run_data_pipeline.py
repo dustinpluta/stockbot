@@ -1,43 +1,34 @@
 # scripts/run_data_pipeline.py
-import pandas as pd
 import sys
 from pathlib import Path
 
-# Add the src directory to the Python path
 sys.path.append(str(Path(__file__).resolve().parents[1] / "src"))
 
-import config
 from preprocessing.data_fetch import fetch_stock_data
 from preprocessing.process_features import process_features
-from preprocessing.features import FEATURE_REGISTRY
+from config import SPLIT_BOUNDS, FEATURE_DIR, FEATURE_SETS, PERIOD
 
-def run_pipeline(ticker_file: Path, 
-                 period: str = None,
-                 interval: str = "1h",
-                 feature_dir: Path = config.FEATURE_DIR,
-                 feature_names: list[str] = FEATURE_REGISTRY.keys(),
-                 debug: bool = False):
-    with open(ticker_file, "r") as f:
-        tickers = [line.strip() for line in f if line.strip()]
-    print(f"Processing features for {len(tickers)} tickers...")
+def run_pipeline(tickers_file: Path, debug: bool=False):
+    tickers = [t.strip() for t in tickers_file.read_text().splitlines() if t.strip()]
+
     for ticker in tickers:
-        df = fetch_stock_data(ticker)  # uses default 60d, 1h, no end date
-        if df is not None and not df.empty:
-            process_features(ticker, df, 
-                             feature_dir, 
-                             save=True,
-                             debug=debug)
-        else:
-            print(f"[WARN] No data for {ticker}")
+        raw_df = fetch_stock_data(ticker, PERIOD)  # full-range OHLCV
+
+        for split_name, (start, end) in SPLIT_BOUNDS.items():
+            process_features(
+                ticker=ticker,
+                raw_df=raw_df,
+                feature_columns=FEATURE_SETS["all"],
+                start_time=start,
+                end_time=end,
+                split_name=split_name,
+                feature_dir=FEATURE_DIR,
+                save=True,
+                debug=debug
+            )
 
 if __name__ == "__main__":
-    if len(sys.argv) < 2:
-        print("Usage: python scripts/run_data_pipeline.py <ticker_file.txt> [time_period]")
+    if len(sys.argv) != 2:
+        print("Usage: python run_data_pipeline.py <tickers.txt>")
         sys.exit(1)
-
-    ticker_file_path = Path(sys.argv[1])
-    if not ticker_file_path.exists():
-        print(f"[ERROR] Ticker file not found: {ticker_file_path}")
-        sys.exit(1)
-    time_period = sys.argv[2] if len(sys.argv) == 3 else "60d"
-    run_pipeline(ticker_file_path, time_period, debug=False)
+    run_pipeline(Path(sys.argv[1]), debug=True)
