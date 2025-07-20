@@ -1,27 +1,46 @@
-from sklearn.metrics import accuracy_score, f1_score, recall_score, confusion_matrix
+# src/model/metrics.py
 
+from typing import Callable, Dict
+from sklearn.metrics import (
+    accuracy_score, f1_score, recall_score, precision_score,
+    mean_squared_error, mean_absolute_error, r2_score
+)
+
+METRIC_REGISTRY: Dict[str, Callable] = {}
+
+def register_metric(name: str):
+    """Decorator to register an evaluation metric."""
+    def decorator(fn: Callable):
+        METRIC_REGISTRY[name] = fn
+        return fn
+    return decorator
+
+# ——— Classification metrics ———
+@register_metric("accuracy")
 def accuracy(y_true, y_pred):
     return accuracy_score(y_true, y_pred)
 
-
+@register_metric("f1")
 def f1(y_true, y_pred):
     return f1_score(y_true, y_pred)
 
-
-def sensitivity(y_true, y_pred):
-    """Also known as recall or true positive rate."""
+@register_metric("recall")
+def recall(y_true, y_pred):
     return recall_score(y_true, y_pred)
 
+@register_metric("precision")
+def precision(y_true, y_pred):
+    return precision_score(y_true, y_pred)
 
-def specificity(y_true, y_pred):
-    """True negative rate: TN / (TN + FP)"""
-    tn, fp, fn, tp = confusion_matrix(y_true, y_pred).ravel()
-    return tn / (tn + fp) if (tn + fp) > 0 else 0.0
+# ——— Regression metrics ———
+@register_metric("mse")
+def mse(y_true, y_pred):
+    return mean_squared_error(y_true, y_pred)
 
+@register_metric("mae")
+def mae(y_true, y_pred):
+    return mean_absolute_error(y_true, y_pred)
 
-METRIC_REGISTRY = {
-    "accuracy": accuracy,
-    "f1": f1,
-    "sensitivity": sensitivity,
-    "specificity": specificity,
-}
+@register_metric("r2")
+def r2(y_true, y_pred):
+    return r2_score(y_true, y_pred)

@@ -2,11 +2,12 @@
 
 from typing import Callable, Dict
 import pandas as pd
+import inspect
 
-# Model classes
-from xgboost import XGBClassifier
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.linear_model import LogisticRegression
+# Existing imports...
+from xgboost import XGBClassifier, XGBRegressor
+from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
+from sklearn.linear_model import LogisticRegression, LinearRegression
 from sklearn.impute import SimpleImputer
 
 MODEL_REGISTRY: Dict[str, Callable] = {}
@@ -14,8 +15,7 @@ MODEL_REGISTRY: Dict[str, Callable] = {}
 def register_model(name: str):
     """
     Decorator to register a model-specific training function.
-    The function signature must be:
-      fn(X_train, y_train, X_val, y_val, params) -> fitted_model
+    Signature: fn(X_train, y_train, X_val, y_val, params) -> fitted_model
     """
     def decorator(fn: Callable):
         if name in MODEL_REGISTRY:
@@ -25,60 +25,54 @@ def register_model(name: str):
     return decorator
 
 
+# ——— Classification trainers ———
+
 @register_model("xgboost")
-def train_xgboost(
-    X_train: pd.DataFrame,
-    y_train: pd.Series,
-    X_val: pd.DataFrame,
-    y_val: pd.Series,
-    params: dict
-) -> XGBClassifier:
+def train_xgboost_classifier(X_train, y_train, X_val, y_val, params):
     model = XGBClassifier(**params)
-    esr = params.get("early_stopping_rounds")
-    if esr:
-        model.fit(
-            X_train, y_train,
-            eval_set=[(X_val, y_val)],
-            early_stopping_rounds=esr,
-            verbose=False
-        )
-    else:
-        model.fit(X_train, y_train)
+    model.fit(X_train, y_train, 
+                eval_set=[(X_val, y_val)],
+                verbose=False)
     return model
 
-
 @register_model("random_forest")
-def train_random_forest(
-    X_train: pd.DataFrame,
-    y_train: pd.Series,
-    X_val: pd.DataFrame,
-    y_val: pd.Series,
-    params: dict
-) -> RandomForestClassifier:
+def train_random_forest_classifier(X_train, y_train, X_val, y_val, params):
     model = RandomForestClassifier(**params)
     model.fit(X_train, y_train)
     return model
 
-
 @register_model("logistic_regression")
-def train_logistic_regression(
-    X_train: pd.DataFrame,
-    y_train: pd.Series,
-    X_val: pd.DataFrame,
-    y_val: pd.Series,
-    params: dict
-) -> LogisticRegression:
-    # Drop any NaNs in features or target
+def train_logistic_regression(X_train, y_train, X_val, y_val, params):
+    import pandas as pd
+    from sklearn.linear_model import LogisticRegression
     df = pd.concat([X_train, y_train.rename("target")], axis=1).dropna()
-    y_clean = df["target"]
-    X_clean = df.drop(columns="target")
-    # Impute any remaining holes (just in case)
+    Xc = df.drop(columns="target")
+    yc = df["target"]
     imputer = SimpleImputer(strategy="mean")
-    X_imputed = pd.DataFrame(
-        imputer.fit_transform(X_clean),
-        columns=X_clean.columns,
-        index=X_clean.index
-    )
+    Xi = pd.DataFrame(imputer.fit_transform(Xc),
+                      columns=Xc.columns, index=Xc.index)
     model = LogisticRegression(**params)
-    model.fit(X_imputed, y_clean)
+    model.fit(Xi, yc)
+    return model
+
+# ——— Regression trainers ———
+
+@register_model("xgboost_regressor")
+def train_xgboost_regressor(X_train, y_train, X_val, y_val, params):
+    model = XGBRegressor(**params)
+    model.fit(X_train, y_train,
+                eval_set=[(X_val, y_val)],
+                verbose=False)
+    return model
+
+@register_model("random_forest_regressor")
+def train_random_forest_regressor(X_train, y_train, X_val, y_val, params):
+    model = RandomForestRegressor(**params)
+    model.fit(X_train, y_train)
+    return model
+
+@register_model("linear_regression")
+def train_linear_regression(X_train, y_train, X_val, y_val, params):
+    model = LinearRegression(**params)
+    model.fit(X_train, y_train)
     return model

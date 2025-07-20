@@ -1,20 +1,34 @@
+# src/model/labeling.py
+
 import pandas as pd
+from typing import Callable, Dict
 
-def label_increase_3h(df: pd.DataFrame) -> pd.Series:
+LABEL_REGISTRY: Dict[str, Callable] = {}
+
+def register_label(name: str):
+    """Decorator to register a labeling function."""
+    def decorator(fn: Callable):
+        LABEL_REGISTRY[name] = fn
+        return fn
+    return decorator
+
+def get_label_function(name: str) -> Callable:
+    """Fetch a registered labeling function by name."""
+    try:
+        return LABEL_REGISTRY[name]
+    except KeyError:
+        raise ValueError(f"Label method '{name}' is not registered.")
+
+@register_label("binary_return_3h")
+def binary_return_3h(df: pd.DataFrame, horizon: int = 3) -> pd.Series:
     """
-    Binary classification label:
-    1 if the Close price increases 3 hours later, 0 otherwise.
+    Binary label: 1 if Close_t+horizon > Close_t, else 0.
     """
-    if "Close" not in df.columns:
-        raise ValueError("Close column required for labeling.")
-    future_close = df["Close"].shift(-3)
-    return (future_close > df["Close"]).astype(int)
+    return (df["Close"].shift(-horizon) > df["Close"]).astype(int)
 
-LABELING_FUNCTIONS = {
-    "increase_3h": label_increase_3h,
-}
-
-def get_label_function(method: str):
-    if method not in LABELING_FUNCTIONS:
-        raise ValueError(f"Unknown label method: {method}")
-    return LABELING_FUNCTIONS[method]
+@register_label("return_3h")
+def return_3h(df: pd.DataFrame, horizon: int = 3) -> pd.Series:
+    """
+    Continuous label: (Close_t+horizon / Close_t) - 1
+    """
+    return (df["Close"].shift(-horizon) / df["Close"]) - 1

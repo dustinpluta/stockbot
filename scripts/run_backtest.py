@@ -37,7 +37,7 @@ def parse_args():
     return parser.parse_args()
 
 
-def load_sim_config(path: Path) -> dict:
+def load_config(path: Path) -> dict:
     with path.open() as f:
         return yaml.safe_load(f)
 
@@ -88,8 +88,13 @@ def run_backtest(sim_cfg: dict, output_file: Path = None):
     df = df.dropna(subset=required_feats)
     X = df[required_feats]
 
+    model_cfg = load_config(MODEL_DIR / model_id / "config.yaml")
+    regression_model = model_cfg["regression_model"]
     # 5) Score
-    df["predicted_prob"] = model.predict_proba(X)[:, 1]
+    if regression_model:
+        df["score"] = model.predict(X)
+    else:
+        df["score"] = model.predict_proba(X)[:, 1]
 
     # 6) Strategy
     if strategy_name not in STRATEGY_REGISTRY:
@@ -117,9 +122,8 @@ def run_backtest(sim_cfg: dict, output_file: Path = None):
 
 def main():
     args = parse_args()
-    sim_cfg = load_sim_config(args.sim_config)
+    sim_cfg = load_config(args.sim_config)
     run_backtest(sim_cfg, args.output)
-
 
 if __name__ == "__main__":
     main()

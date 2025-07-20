@@ -27,7 +27,6 @@ def register_strategy(name: str):
 def basic_buy_strategy(
     df: pd.DataFrame,
     top_k: int = 3,
-    prob_col: str = "predicted_prob"
 ) -> pd.DataFrame:
     """
     Strategy #1: Buy top_k tickers by predicted probability each timestamp.
@@ -37,7 +36,7 @@ def basic_buy_strategy(
     df["action"] = None
 
     for ts, group in df.groupby("timestamp"):
-        top = group.nlargest(top_k, prob_col)
+        top = group.nlargest(top_k, "score")
         df.loc[top.index, "action"] = "buy"
 
     return df
@@ -48,13 +47,12 @@ def hold_n_hours_strategy(
     df: pd.DataFrame,
     hold_hours: int = 3,
     top_k: int = 3,
-    prob_col: str = "predicted_prob"
 ) -> pd.DataFrame:
     """
     Strategy #2: Buy top_k as in basic_buy, then sell each position
     exactly hold_hours later (if that timestamp exists).
     """
-    df = basic_buy_strategy(df, top_k=top_k, prob_col=prob_col)
+    df = basic_buy_strategy(df, top_k=top_k)
     df = df.copy()
 
     for idx, row in df[df["action"] == "buy"].iterrows():
@@ -70,7 +68,7 @@ def threshold_time_exit_strategy(
     df: pd.DataFrame,
     threshold: float = 0.7,
     hold_hours: int = 3,
-    prob_col: str = "predicted_prob"
+    score: str = "predicted_prob"
 ) -> pd.DataFrame:
     """
     Strategy #3: Buy when predicted probability exceeds threshold,
@@ -79,7 +77,7 @@ def threshold_time_exit_strategy(
     df = df.copy()
     df["action"] = None
 
-    buys = df[df[prob_col] > threshold]
+    buys = df[df[score] > threshold]
     df.loc[buys.index, "action"] = "buy"
 
     for idx, row in buys.iterrows():
