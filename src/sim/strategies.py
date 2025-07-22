@@ -2,7 +2,7 @@
 
 import pandas as pd
 from datetime import timedelta
-from typing import Callable, Dict
+from typing import Callable, Dict, Any, List
 
 # --- Strategy Registry ---
 
@@ -20,69 +20,64 @@ def register_strategy(name: str):
         return fn
     return decorator
 
+@register_strategy("cooldown_sell")
+def cooldown_sell_strategy(
+    hour_df: pd.DataFrame,
+    holdings: Dict[str, Dict[str, Any]],
+    params: Dict[str, Any],
+    cooldown: timedelta
+) -> List[str]:
+    """
+    Liquidate any position held for >= cooldown hours.
+    Returns a list of tickers to sell.
+    """
+    ts = hour_df["timestamp"].iloc[0]
+    return [
+        ticker for ticker, info in holdings.items()
+        if ts - info["buy_time"] >= cooldown
+    ]
 
-# --- Strategy Implementations ---
-
-@register_strategy("basic_buy")
-def basic_buy_strategy(
+@register_strategy("first_hour_equal_allocation")
+def first_hour_equal_allocation_strategy(
     df: pd.DataFrame,
-    top_k: int = 3,
+    budget: float,
+    params: Dict[str, Any],
+    price_col: str = "Close",
+    score: str = "score",
+    target_hour: int = 13
 ) -> pd.DataFrame:
     """
-    Strategy #1: Buy top_k tickers by predicted probability each timestamp.
-    End-of-day sells are handled by the simulator.
+    In the first trading hour only, buy the top_k tickers by score,
+    allocating budget equally across them.
+    Otherwise, no action.
+
+    Args:
+      df: hour‐slice DataFrame with columns ['timestamp','ticker',price_col,score_col]
+      budget: current available cash
+      top_k: how many names to buy
+      price_col: price column name
+      score_col: model score column
+    Returns:
+      DataFrame with added 'action' and 'quantity'
     """
     df = df.copy()
-    df["action"] = None
+    df["action"]   = None
+    df["quantity"] = 0
 
-    for ts, group in df.groupby("timestamp"):
-        top = group.nlargest(top_k, "score")
-        df.loc[top.index, "action"] = "buy"
-
-    return df
-
-
-@register_strategy("hold_n_hours")
-def hold_n_hours_strategy(
-    df: pd.DataFrame,
-    hold_hours: int = 3,
-    top_k: int = 3,
-) -> pd.DataFrame:
-    """
-    Strategy #2: Buy top_k as in basic_buy, then sell each position
-    exactly hold_hours later (if that timestamp exists).
-    """
-    df = basic_buy_strategy(df, top_k=top_k)
-    df = df.copy()
-
-    for idx, row in df[df["action"] == "buy"].iterrows():
-        sell_time = row["timestamp"] + timedelta(hours=hold_hours)
-        mask = (df["timestamp"] == sell_time) & (df["ticker"] == row["ticker"])
-        df.loc[mask, "action"] = "sell"
-
-    return df
-
-
-@register_strategy("threshold_hold")
-def threshold_time_exit_strategy(
-    df: pd.DataFrame,
-    threshold: float = 0.7,
-    hold_hours: int = 3,
-    score: str = "predicted_prob"
-) -> pd.DataFrame:
-    """
-    Strategy #3: Buy when predicted probability exceeds threshold,
-    then sell hold_hours later if that timestamp exists.
-    """
-    df = df.copy()
-    df["action"] = None
-
-    buys = df[df[score] > threshold]
-    df.loc[buys.index, "action"] = "buy"
-
-    for idx, row in buys.iterrows():
-        sell_time = row["timestamp"] + timedelta(hours=hold_hours)
-        mask = (df["timestamp"] == sell_time) & (df["ticker"] == row["ticker"])
-        df.loc[mask, "action"] = "sell"
+    # Detect the first hour of the day: on Yahoo data this is hour==10 (10:30 bar)
+    if df["timestamp"].dt.hour.iloc[0] == target_hour:
+        # pick top_k by score
+        top = df.nlargest(params["top_k"], score)
+        if not top.empty:
+            alloc = min([1000 / params["top_k"], budget])
+            for idx, row in top.iterrows():
+                print(row)
+                print(alloc)
+                price = row[price_col]
+                qty   = int(alloc // price)
+                print(qty)
+                if qty > 0:
+                    df.at[idx, "action"]   = "buy"
+                    df.at[idx, "quantity"] = qty
 
     return df

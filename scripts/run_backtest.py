@@ -15,7 +15,7 @@ sys.path.insert(0, str(SRC_ROOT))
 from config import FEATURE_DIR, MODEL_DIR
 from preprocessing.filter_feature_data import filter_feature_data
 from sim.strategies import STRATEGY_REGISTRY
-from sim.simulator import PortfolioSimulator
+from sim.simulate import BacktestSimulator
 
 
 def parse_args():
@@ -46,10 +46,12 @@ def run_backtest(sim_cfg: dict, output_file: Path = None):
     # Unpack sim config
     model_id      = sim_cfg["model_id"]
     tickers_file  = Path(sim_cfg["tickers_file"])
-    strategy_name = sim_cfg["strategy"]
-    strat_params  = sim_cfg.get("strategy_params", {})
+    buy_strategy = sim_cfg["buy_strategy"]
+    buy_params  = sim_cfg.get("buy_params", {})
+    sell_strategy = sim_cfg["sell_strategy"]
+    sell_params  = sim_cfg.get("sell_params", {})
     budget        = sim_cfg.get("initial_budget", 1000.0)
-    cooldown      = sim_cfg.get("cooldown_hours", strat_params.get("hold_hours", 3))
+    cooldown      = sim_cfg.get("cooldown_hours", sell_params.get("hold_hours", 3))
     feature_split = sim_cfg.get("feature_split", "test")
 
     # New: date-range fields
@@ -97,23 +99,26 @@ def run_backtest(sim_cfg: dict, output_file: Path = None):
         df["score"] = model.predict_proba(X)[:, 1]
 
     # 6) Strategy
-    if strategy_name not in STRATEGY_REGISTRY:
-        sys.exit(f"[ERROR] Unknown strategy '{strategy_name}'")
-    strat_fn = STRATEGY_REGISTRY[strategy_name]
-    print(f"[INFO] Applying strategy '{strategy_name}' with params {strat_params}")
-    signals = strat_fn(df, **strat_params)
+    if buy_strategy not in STRATEGY_REGISTRY:
+        sys.exit(f"[ERROR] Unknown strategy '{buy_strategy}'")
+    if sell_strategy not in STRATEGY_REGISTRY:
+        sys.exit(f"[ERROR] Unknown strategy '{sell_strategy}'")
+    buy_fn = STRATEGY_REGISTRY[buy_strategy]
+    sell_fn = STRATEGY_REGISTRY[sell_strategy]
+    print(f"[INFO] Buy strategy: '{buy_strategy}' with params {buy_params}")
+    print(f"[INFO] Sell strategy: '{sell_strategy}' with params {sell_params}")
+    sim = BacktestSimulator(initial_budget=budget,
+                        cooldown_hours=cooldown)
+    trade_log, summary = sim.run(df, 
+                                 buy_fn, buy_params,
+                                 sell_fn, sell_params)
 
-    # 7) Simulate
-    sim = PortfolioSimulator(initial_budget=budget, cooldown_hours=cooldown)
-    trade_log = sim.simulate(signals, price_col="Close")
-
-    # 8) Report
-    summary = sim.get_summary()
+    # 7) Report
     print("\n[RESULT] Backtest Summary:")
     for k, v in summary.items():
         print(f"  {k}: {v}")
 
-    # 9) Save if requested
+    # 8) Save if requested
     if output_file:
         output_file.parent.mkdir(exist_ok=True, parents=True)
         trade_log.to_csv(output_file, index=False)
